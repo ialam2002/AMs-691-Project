@@ -1,0 +1,34 @@
+{
+  "model": "llama3.1:8b",
+  "generated_at": "2025-10-27T02:59:41Z",
+  "config": {
+    "temperature": 0.0,
+    "max_hotpot": 10,
+    "max_squad": 10
+  },
+  "datasets": {
+    "hotpotqa": {
+      "em": 0.0,
+      "f1": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "rouge_l": 0.0,
+      "bleu": 0.0,
+      "supporting_fact_f1": 0.1,
+      "supporting_fact_precision": 0.1,
+      "supporting_fact_recall": 0.1,
+      "count": 10,
+      "prediction_file": "results\\predictions_gpu\\hotpotqa_predictions.json"
+    },
+    "squad_v2": {
+      "em": 0.5,
+      "f1": 0.5857142857142857,
+      "precision": 0.6,
+      "recall": 0.575,
+      "rouge_l": 0.5857142857142857,
+      "bleu": 0.554444605966067,
+      "count": 10,
+      "prediction_file": "results\\predictions_gpu\\squad_v2_predictions.json"
+    }
+  }
+}
