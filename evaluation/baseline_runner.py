@@ -14,8 +14,7 @@ import math
 import re
 import sys
 import time
-import http.client
-from http import HTTPStatus
+ 
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -42,52 +41,56 @@ class OllamaConfig:
 class OllamaClient:
     def __init__(self, config: OllamaConfig) -> None:
         self.config = config
+        # Lazy import to provide a clean error if the package is missing.
+        try:
+            import ollama  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "The 'ollama' Python package is required. Install with: pip install ollama"
+            ) from exc
+
+        # Prefer the official client to set a custom host/port.
+        base_url = f"http://{self.config.host}:{self.config.port}"
+        try:
+            from ollama import Client  # type: ignore
+
+            # Not all versions support a timeout arg; avoid passing unknown kwargs.
+            self._client = Client(host=base_url)
+            self._use_module_level = False
+        except Exception:
+            # Fall back to module-level functions (uses default host env/localhost).
+            import ollama as _ollama  # type: ignore
+
+            self._ollama_module = _ollama
+            self._use_module_level = True
 
     def generate(self, prompt: str) -> Dict[str, Any]:
         """
-        Invoke Ollama via its HTTP API with the specified prompt and parse a JSON
-        object from the model response. Falls back to raw text if JSON parsing fails.
+        Invoke Ollama using the official Python library with the specified prompt
+        and parse a JSON object from the model response. Falls back to raw text
+        if JSON parsing fails.
         """
-        payload = {
+        request_kwargs = {
             "model": self.config.model,
             "prompt": prompt,
-            "stream": False,
             "options": self._build_options(),
+            "stream": False,
         }
-        body = json.dumps(payload)
         if self.config.verbose:
-            print("[ollama debug] request payload:", json.dumps(payload, indent=2))
-        headers = {"Content-Type": "application/json"}
+            print("[ollama debug] request payload:", json.dumps(request_kwargs, indent=2))
 
         last_error: Optional[str] = None
         for attempt in range(1, self.config.num_retries + 1):
             try:
-                conn = http.client.HTTPConnection(
-                    host=self.config.host,
-                    port=self.config.port,
-                    timeout=self.config.request_timeout,
-                )
-                conn.request("POST", "/api/generate", body=body, headers=headers)
-                response = conn.getresponse()
-                status = response.status
-                raw = response.read().decode("utf-8")
-                conn.close()
+                if getattr(self, "_use_module_level", False):
+                    payload = self._ollama_module.generate(**request_kwargs)  # type: ignore[attr-defined]
+                else:
+                    payload = self._client.generate(**request_kwargs)  # type: ignore[attr-defined]
                 if self.config.verbose:
-                    print(f"[ollama debug] HTTP {status} response:\n{raw[:2000]}")
-            except (ConnectionError, TimeoutError, http.client.HTTPException, OSError) as exc:
-                last_error = f"connection error: {exc}"
-                time.sleep(1.5 * attempt)
-                continue
-
-            if status != HTTPStatus.OK:
-                last_error = f"HTTP {status}: {raw}"
-                time.sleep(1.5 * attempt)
-                continue
-
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                last_error = f"invalid JSON from Ollama: {raw[:200]}"
+                    preview = json.dumps({k: payload.get(k) for k in ("model", "created_at", "total_duration") if k in payload}, indent=2)
+                    print(f"[ollama debug] response meta:\n{preview}")
+            except Exception as exc:
+                last_error = f"ollama generate error: {exc}"
                 time.sleep(1.5 * attempt)
                 continue
 
@@ -95,7 +98,6 @@ class OllamaClient:
             parsed = _parse_json_response(text)
             if parsed is not None:
                 return parsed
-            # Fall back to raw answer when JSON parsing fails.
             return {"answer": text, "supporting_facts": []}
 
         raise RuntimeError(f"Ollama generation failed after {self.config.num_retries} attempts: {last_error}")
@@ -121,6 +123,9 @@ def _parse_json_response(text: str) -> Optional[Dict[str, Any]]:
         candidate.setdefault("supporting_facts", [])
         if not isinstance(candidate["supporting_facts"], list):
             candidate["supporting_facts"] = []
+        # Ensure answer is a string to avoid attribute errors downstream.
+        if not isinstance(candidate.get("answer"), str):
+            candidate["answer"] = str(candidate.get("answer", ""))
         return candidate
     return None
 
@@ -338,7 +343,7 @@ def evaluate_hotpotqa(
 
         prompt = HOTPot_PROMPT_TEMPLATE.format(context=context_text, question=question)
         response = client.generate(prompt)
-        predicted_answer = response.get("answer", "").strip()
+        predicted_answer = str(response.get("answer", "")).strip()
         supporting = response.get("supporting_facts", [])
 
         f1, prec, rec, em = _best_over_ground_truths(predicted_answer, [answer])
@@ -392,7 +397,7 @@ def evaluate_squad_v2(
 
         prompt = SQUAD_PROMPT_TEMPLATE.format(context=context, question=question)
         response = client.generate(prompt)
-        predicted_answer = response.get("answer", "").strip()
+        predicted_answer = str(response.get("answer", "")).strip()
 
         f1, prec, rec, em = _best_over_ground_truths(predicted_answer, answers)
         rouge = max(_rouge_l_score(predicted_answer, gold) for gold in answers) if answers else 0.0

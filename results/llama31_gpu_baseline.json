@@ -1,33 +1,33 @@
 {
   "model": "llama3.1:8b",
-  "generated_at": "2025-10-27T02:59:41Z",
+  "generated_at": "2025-11-01T03:42:46Z",
   "config": {
     "temperature": 0.0,
-    "max_hotpot": 10,
-    "max_squad": 10
+    "max_hotpot": 400,
+    "max_squad": 400
   },
   "datasets": {
     "hotpotqa": {
-      "em": 0.0,
-      "f1": 0.0,
-      "precision": 0.0,
-      "recall": 0.0,
-      "rouge_l": 0.0,
-      "bleu": 0.0,
-      "supporting_fact_f1": 0.1,
-      "supporting_fact_precision": 0.1,
-      "supporting_fact_recall": 0.1,
-      "count": 10,
+      "em": 0.505,
+      "f1": 0.6303619399189142,
+      "precision": 0.6513784802315835,
+      "recall": 0.6911021825396824,
+      "rouge_l": 0.6299073944643687,
+      "bleu": 0.7177619766334672,
+      "supporting_fact_f1": 0.065,
+      "supporting_fact_precision": 0.065,
+      "supporting_fact_recall": 0.065,
+      "count": 400,
       "prediction_file": "results\\predictions_gpu\\hotpotqa_predictions.json"
     },
     "squad_v2": {
-      "em": 0.5,
-      "f1": 0.5857142857142857,
-      "precision": 0.6,
-      "recall": 0.575,
-      "rouge_l": 0.5857142857142857,
-      "bleu": 0.554444605966067,
-      "count": 10,
+      "em": 0.395,
+      "f1": 0.4323955359774324,
+      "precision": 0.42903458456747934,
+      "recall": 0.4464444444444445,
+      "rouge_l": 0.43102648835838475,
+      "bleu": 0.4340660875249659,
+      "count": 400,
       "prediction_file": "results\\predictions_gpu\\squad_v2_predictions.json"
     }
   }
