@@ -9,6 +9,7 @@ example, computes the requested metrics, and stores aggregated scores in JSON.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -251,6 +252,65 @@ def _brevity_penalty(pred_len: int, gold_len: int) -> float:
     return math.exp(1 - (gold_len / pred_len))
 
 
+# --------------------------------------------------------------------------- #
+# Lightweight response cache
+# --------------------------------------------------------------------------- #
+
+
+class ResponseCache:
+    def __init__(self, root: Optional[Path]) -> None:
+        self.root = root
+        if self.root is not None:
+            self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path_for(self, key: str) -> Optional[Path]:
+        if self.root is None:
+            return None
+        return self.root / f"{key}.json"
+
+    def get(self, key: str) -> Optional[Dict[str, Any]]:
+        path = self._path_for(key)
+        if path is None or not path.exists():
+            return None
+        try:
+            with path.open("r", encoding="utf-8") as fp:
+                return json.load(fp)
+        except Exception:
+            return None
+
+    def set(self, key: str, value: Dict[str, Any]) -> None:
+        path = self._path_for(key)
+        if path is None:
+            return
+        try:
+            with path.open("w", encoding="utf-8") as fp:
+                json.dump(value, fp, ensure_ascii=False)
+        except Exception:
+            pass
+
+
+def _cache_key(model: str, prompt: str, options: Dict[str, Any], sample_tag: Optional[str] = None) -> str:
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "options": options or {},
+        "sample": sample_tag or "",
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _generate_with_cache(client: "OllamaClient", prompt: str, cache: ResponseCache, sample_tag: Optional[str]) -> Dict[str, Any]:
+    key = _cache_key(client.config.model, prompt, client._build_options(), sample_tag)
+    cached = cache.get(key) if cache is not None else None
+    if cached is not None:
+        return cached
+    resp = client.generate(prompt)
+    if cache is not None:
+        cache.set(key, resp)
+    return resp
+
+
 def _supporting_fact_metrics(predicted: Sequence[str], gold: Sequence[Sequence[str]]) -> Tuple[float, float, float]:
     pred_norm = {normalize_answer(item) for item in predicted if isinstance(item, str)}
     gold_norm = {
@@ -320,6 +380,9 @@ def evaluate_hotpotqa(
     client: OllamaClient,
     dataset: Iterable[Dict[str, Any]],
     predictions_dir: Path,
+    *,
+    samples: int = 1,
+    cache: Optional[ResponseCache] = None,
 ) -> Dict[str, Any]:
     metrics = {
         "count": 0,
@@ -342,9 +405,23 @@ def evaluate_hotpotqa(
         context_text = _format_hotpot_context(example.get("context", []))
 
         prompt = HOTPot_PROMPT_TEMPLATE.format(context=context_text, question=question)
-        response = client.generate(prompt)
-        predicted_answer = str(response.get("answer", "")).strip()
-        supporting = response.get("supporting_facts", [])
+        responses: List[Dict[str, Any]] = []
+        vote_counter: Dict[str, int] = {}
+        for i in range(max(1, int(samples))):
+            tag = f"sample_{i+1}" if samples and samples > 1 else None
+            resp = _generate_with_cache(client, prompt, cache or ResponseCache(None), tag)
+            responses.append(resp)
+            norm_ans = normalize_answer(str(resp.get("answer", "")).strip())
+            vote_counter[norm_ans] = vote_counter.get(norm_ans, 0) + 1
+
+        # Choose majority normalized answer; tie-break by shortest string
+        if responses:
+            best_norm = sorted(vote_counter.items(), key=lambda kv: (-kv[1], len(kv[0])))[0][0]
+            chosen = next((r for r in responses if normalize_answer(str(r.get("answer", "")).strip()) == best_norm), responses[0])
+        else:
+            chosen = {"answer": "", "supporting_facts": []}
+        predicted_answer = str(chosen.get("answer", "")).strip()
+        supporting = chosen.get("supporting_facts", [])
 
         f1, prec, rec, em = _best_over_ground_truths(predicted_answer, [answer])
         rouge = _rouge_l_score(predicted_answer, answer)
@@ -362,11 +439,10 @@ def evaluate_hotpotqa(
         metrics["supporting_fact_precision"] += sp_prec
         metrics["supporting_fact_recall"] += sp_rec
 
-        prediction_records[qid] = {
-            "answer": predicted_answer,
-            "supporting_facts": supporting,
-            "raw_prompt": prompt,
-        }
+        record: Dict[str, Any] = {"answer": predicted_answer, "supporting_facts": supporting, "raw_prompt": prompt}
+        if samples and samples > 1:
+            record["votes"] = vote_counter
+        prediction_records[qid] = record
 
     return _finalize_metrics(metrics, prediction_records, predictions_dir / "hotpotqa_predictions.json")
 
@@ -375,6 +451,9 @@ def evaluate_squad_v2(
     client: OllamaClient,
     dataset: Iterable[Dict[str, Any]],
     predictions_dir: Path,
+    *,
+    samples: int = 1,
+    cache: Optional[ResponseCache] = None,
 ) -> Dict[str, Any]:
     metrics = {
         "count": 0,
@@ -396,8 +475,21 @@ def evaluate_squad_v2(
             answers = [""]
 
         prompt = SQUAD_PROMPT_TEMPLATE.format(context=context, question=question)
-        response = client.generate(prompt)
-        predicted_answer = str(response.get("answer", "")).strip()
+        responses: List[Dict[str, Any]] = []
+        vote_counter: Dict[str, int] = {}
+        for i in range(max(1, int(samples))):
+            tag = f"sample_{i+1}" if samples and samples > 1 else None
+            resp = _generate_with_cache(client, prompt, cache or ResponseCache(None), tag)
+            responses.append(resp)
+            norm_ans = normalize_answer(str(resp.get("answer", "")).strip())
+            vote_counter[norm_ans] = vote_counter.get(norm_ans, 0) + 1
+
+        if responses:
+            best_norm = sorted(vote_counter.items(), key=lambda kv: (-kv[1], len(kv[0])))[0][0]
+            chosen = next((r for r in responses if normalize_answer(str(r.get("answer", "")).strip()) == best_norm), responses[0])
+        else:
+            chosen = {"answer": ""}
+        predicted_answer = str(chosen.get("answer", "")).strip()
 
         f1, prec, rec, em = _best_over_ground_truths(predicted_answer, answers)
         rouge = max(_rouge_l_score(predicted_answer, gold) for gold in answers) if answers else 0.0
@@ -411,10 +503,10 @@ def evaluate_squad_v2(
         metrics["rouge_l"] += rouge
         metrics["bleu"] += bleu
 
-        prediction_records[qid] = {
-            "answer": predicted_answer,
-            "raw_prompt": prompt,
-        }
+        record: Dict[str, Any] = {"answer": predicted_answer, "raw_prompt": prompt}
+        if samples and samples > 1:
+            record["votes"] = vote_counter
+        prediction_records[qid] = record
 
     return _finalize_metrics(metrics, prediction_records, predictions_dir / "squad_v2_predictions.json")
 
@@ -453,6 +545,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-hotpot", type=int, default=None, help="Optional cap on number of HotpotQA examples.")
     parser.add_argument("--max-squad", type=int, default=None, help="Optional cap on number of SQuAD examples.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature for Ollama.")
+    parser.add_argument("--samples", type=int, default=1, help="Self-consistency samples per example (majority vote).")
+    parser.add_argument("--cache-dir", type=Path, default=None, help="Optional directory to cache model responses.")
     parser.add_argument(
         "--ollama-option",
         action="append",
@@ -501,18 +595,21 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         verbose=getattr(args, "verbose", False),
     )
     client = OllamaClient(config)
+    cache = ResponseCache(args.cache_dir) if getattr(args, "cache_dir", None) else ResponseCache(None)
 
     hotpot_examples = list(load_hotpotqa(args.hotpot_path, args.max_hotpot))
     squad_examples = list(load_squad_v2(args.squad_path, args.max_squad))
 
-    hotpot_metrics = evaluate_hotpotqa(client, hotpot_examples, args.predictions_dir)
-    squad_metrics = evaluate_squad_v2(client, squad_examples, args.predictions_dir)
+    hotpot_metrics = evaluate_hotpotqa(client, hotpot_examples, args.predictions_dir, samples=args.samples, cache=cache)
+    squad_metrics = evaluate_squad_v2(client, squad_examples, args.predictions_dir, samples=args.samples, cache=cache)
 
     summary = {
         "model": args.model,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "config": {
             "temperature": args.temperature,
+            "samples": args.samples,
+            "cache_dir": str(args.cache_dir) if args.cache_dir else None,
             "max_hotpot": args.max_hotpot,
             "max_squad": args.max_squad,
         },

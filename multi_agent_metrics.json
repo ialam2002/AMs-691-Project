@@ -1,0 +1,38 @@
+{
+  "model": "llama3.1:8b",
+  "generated_at": "2025-11-14T04:39:54Z",
+  "config": {
+    "temperature": 0.0,
+    "top_k": 8,
+    "max_hotpot": 200,
+    "max_squad": 200,
+    "reflection_loops": 2,
+    "wiki_search_limit": 3,
+    "wiki_cache": "results\\wiki_cache"
+  },
+  "datasets": {
+    "hotpotqa": {
+      "em": 0.31,
+      "f1": 0.42971276458264207,
+      "precision": 0.43442156023084477,
+      "recall": 0.5132936507936509,
+      "rouge_l": 0.4356294312493087,
+      "bleu": 0.5834800066829711,
+      "supporting_fact_f1": 0.085,
+      "supporting_fact_precision": 0.085,
+      "supporting_fact_recall": 0.085,
+      "count": 200,
+      "prediction_file": "predictions_multi\\hotpotqa_predictions.json"
+    },
+    "squad_v2": {
+      "em": 0.37,
+      "f1": 0.4121904761904762,
+      "precision": 0.40212698412698417,
+      "recall": 0.4375,
+      "rouge_l": 0.4121904761904762,
+      "bleu": 0.42127487884201137,
+      "count": 200,
+      "prediction_file": "predictions_multi\\squad_v2_predictions.json"
+    }
+  }
+}

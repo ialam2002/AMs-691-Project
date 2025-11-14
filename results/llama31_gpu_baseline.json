@@ -1,8 +1,10 @@
 {
   "model": "llama3.1:8b",
-  "generated_at": "2025-11-01T03:42:46Z",
+  "generated_at": "2025-11-12T05:17:50Z",
   "config": {
     "temperature": 0.0,
+    "samples": 1,
+    "cache_dir": null,
     "max_hotpot": 400,
     "max_squad": 400
   },
